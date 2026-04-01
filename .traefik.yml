@@ -1,0 +1,24 @@
+displayName: GateKeeper
+type: middleware
+import: github.com/caverar/gatekeeper
+
+summary: "A Layer 7 Security Group for source IP and destination host filtering, intended for proxy and vpn traffic rules"
+
+testData:
+  defaultPolicy:
+    action: "block"
+    destinationHosts:
+      - "*"
+  policies:
+    cloudProxy:
+      sources:
+        - "192.168.0.0/16"
+      action: "block"
+      destinationHosts:
+        - "dashboard.example.com"
+    vpn:
+      sources:
+        - "10.0.0.0/8"
+      action: "allow"
+      destinationHosts:
+        - "*"
