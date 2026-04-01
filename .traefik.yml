@@ -1,6 +1,6 @@
-displayName: GateKeeper
+displayName: IP Host GateKeeper
 type: middleware
-import: github.com/caverar/gatekeeper
+import: github.com/caverar/traefik-minifirewall
 
 summary: "A Layer 7 Security Group for source IP and destination host filtering, intended for proxy and vpn traffic rules"
 
