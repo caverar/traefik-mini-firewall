@@ -1,0 +1,16 @@
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic_conf.yml
+
+experimental:
+  localPlugins:
+    gatekeeper:
+      moduleName: github.com/caverar/traefik-mini-firewall
