@@ -1,0 +1,38 @@
+http:
+  routers:
+    test-router:
+      rule: Host(`allow.local`) || Host(`block.local`) || Host(`test.wildcard.local`) || Host(`other.local`)
+      service: whoami-service
+      middlewares:
+        - my-gatekeeper
+
+  services:
+    whoami-service:
+      loadBalancer:
+        servers:
+          - url: "http://whoami:80"
+
+  middlewares:
+    my-gatekeeper:
+      plugin:
+        gatekeeper:
+          defaultPolicy:
+            action: block
+            destinationHosts:
+              - "*"
+          policies:
+            # Policy 1: Explicitly allow allow.local
+            allow-explicit:
+              sources: ["*"]
+              action: allow
+              destinationHosts: ["allow.local"]
+            # Policy 2: Explicitly block block.local
+            block-explicit:
+              sources: ["*"]
+              action: block
+              destinationHosts: ["block.local"]
+            # Policy 3: Allow wildcards for .local
+            allow-wildcard:
+              sources: ["*"]
+              action: allow
+              destinationHosts: ["*.wildcard.local"]
