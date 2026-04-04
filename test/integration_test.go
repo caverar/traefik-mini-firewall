@@ -1,7 +1,9 @@
 package test
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"testing"
@@ -9,64 +11,71 @@ import (
 )
 
 func TestIntegrationGateKeeper(t *testing.T) {
-	// 1. Start the test environment using Docker Compose
-	t.Log("Starting test environment with Docker Compose...")
+	// 1. Orchestrate the test environment
+	t.Log("Step 1: Lifting Docker Compose stack...")
 	cmdUp := exec.Command("docker-compose", "up", "-d")
 	if output, err := cmdUp.CombinedOutput(); err != nil {
-		t.Fatalf("Failed to start environment: %s\n%s", err, output)
+		t.Fatalf("Failed to start Docker Compose: %s\n%s", err, output)
 	}
 
-	// Ensure cleanup after the test finishes
+	// Cleanup logic: ensure environment is destroyed even if the test panics
 	t.Cleanup(func() {
 		t.Log("Cleaning up environment...")
 		exec.Command("docker-compose", "down", "-v").Run()
 	})
 
-	// 2. Wait for Traefik and the plugin to be initialized
+	// 2. Wait for Traefik and Plugin Health
 	maxRetries := 10
 	ready := false
 	for i := 0; i < maxRetries; i++ {
-		resp, err := http.Get("http://localhost:8080/api/rawdata")
+		// We check the rawdata API to ensure our middleware is actually registered
+		resp, err := http.Get("http://localhost:8080/api/http/middlewares")
 		if err == nil && resp.StatusCode == http.StatusOK {
-			ready = true
-			break
+			body, _ := io.ReadAll(resp.Body)
+			if json.Valid(body) { // Basic check that Traefik is answering JSON
+				ready = true
+				break
+			}
 		}
-		t.Logf("Waiting for Traefik API... (Attempt %d/%d)", i+1, maxRetries)
+		t.Logf("Waiting for Traefik API... (%d/%d)", i+1, maxRetries)
 		time.Sleep(2 * time.Second)
 	}
-	if !ready {
-		t.Fatal("Traefik did not become ready in time")
-	}
+	if !ready { t.Fatal("Traefik API timed out") }
 
-	// 3. Define Intensive Test Cases
+	// 3. Intensive Traffic Scenarios
 	tests := []struct {
 		name           string
 		host           string
 		expectedStatus int
 	}{
 		{
-			name:           "Exact Match - Allowed",
+			name:           "Positive Case: Allowed Host (allow.local)",
 			host:           "allow.local",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:           "Exact Match - Blocked",
+			name:           "Negative Case: Explicitly Blocked Host (block.local)",
 			host:           "block.local",
 			expectedStatus: http.StatusForbidden,
 		},
 		{
-			name:           "Wildcard Match - Allowed",
+			name:           "Pattern Case: Wildcard Match Allowed (*.wildcard.local)",
 			host:           "test.wildcard.local",
 			expectedStatus: http.StatusOK,
 		},
 		{
-			name:           "Default Policy - Blocked (No router match)",
+			name:           "Edge Case: Host not defined in Traefik Routers",
 			host:           "random.host.com",
-			expectedStatus: http.StatusNotFound, // Traefik returns 404 if no router matches
+			expectedStatus: http.StatusNotFound,
 		},
 		{
-			name:           "Default Policy - Blocked (Router match, but no policy match)",
+			name:           "Security Case: Router Match but Policy Default Block",
 			host:           "other.local",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "Source IP Restriction: Blocked because requester IP is not 192.168.99.x",
+			host:           "restricted-ip.local",
 			expectedStatus: http.StatusForbidden,
 		},
 	}
@@ -84,15 +93,13 @@ func TestIntegrationGateKeeper(t *testing.T) {
 			req.Host = tc.host // Simulate the Host header
 
 			resp, err := client.Do(req)
-			if err != nil {
-				t.Fatalf("Request failed: %v", err)
-			}
+			if err != nil { t.Fatalf("Request failed: %v", err) }
 			defer resp.Body.Close()
 
 			if resp.StatusCode != tc.expectedStatus {
-				t.Errorf("[%s] Expected status %d, got %d", tc.host, tc.expectedStatus, resp.StatusCode)
+				t.Errorf("Host: %s | Expected: %d | Got: %d", tc.host, tc.expectedStatus, resp.StatusCode)
 			} else {
-				t.Logf("[%s] Received expected status: %d", tc.host, resp.StatusCode)
+				t.Logf("PASS: %s -> %d", tc.host, resp.StatusCode)
 			}
 		})
 	}

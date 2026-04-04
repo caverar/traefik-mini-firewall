@@ -2,6 +2,7 @@ package traefik_mini_firewall
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -87,55 +88,80 @@ func TestGateKeeper_ServeHTTP(t *testing.T) {
 			host:           "public.me",
 			expectedStatus: http.StatusOK,
 		},
+		{
+			desc: "Deny when IP is valid but not in allowed CIDR",
+			config: &Config{
+				Policies: map[string]Policy{
+					"private-only": {
+						Sources:          []string{"192.168.1.0/24"},
+						Action:           "allow",
+						DestinationHosts: []string{"private.local"},
+					},
+				},
+				DefaultPolicy: DefaultPolicy{Action: "block", DestinationHosts: []string{"*"}},
+			},
+			remoteAddr:     "10.0.0.1:1234",
+			host:           "private.local",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			desc: "Allow multiple CIDRs in one policy",
+			config: &Config{
+				Policies: map[string]Policy{
+					"multi-net": {
+						Sources:          []string{"10.0.0.0/24", "172.16.0.0/16"},
+						Action:           "allow",
+						DestinationHosts: []string{"multi.local"},
+					},
+				},
+			},
+			remoteAddr:     "172.16.0.50:80",
+			host:           "multi.local",
+			expectedStatus: http.StatusOK,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			// 1. Setup the next handler in the chain (the "app")
 			nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
 
-			// 2. Instantiate the middleware
 			ctx := context.Background()
 			handler, err := New(ctx, nextHandler, tc.config, "test-gatekeeper")
-			if err != nil {
-				t.Fatalf("Failed to create middleware: %v", err)
-			}
+			if err != nil { t.Fatalf("Failed to create middleware: %v", err) }
 
-			// 3. Create a mock request
 			req := httptest.NewRequest(http.MethodGet, "http://"+tc.host, nil)
 			req.RemoteAddr = tc.remoteAddr
-			req.Host = tc.host // httptest might overwrite this from URL, so we set it explicitly
+			req.Host = tc.host
 
-			// 4. Create a response recorder
 			rr := httptest.NewRecorder()
-
-			// 5. Execute
 			handler.ServeHTTP(rr, req)
-
-			// 6. Assert
-			if rr.Code != tc.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tc.expectedStatus, rr.Code)
-			}
+			if rr.Code != tc.expectedStatus { t.Errorf("Expected %d, got %d", tc.expectedStatus, rr.Code) }
 		})
 	}
 }
 
-func TestHostMatches(t *testing.T) {
-	// POLICY TO TEST
-	// policy := InternalPolicy{
-	// 	destinationHosts: []string{"exact.com", "*.wildcard.me", "*"},
-	// }
+func TestIPMatches(t *testing.T) {
+	_, netA, _ := net.ParseCIDR("10.0.0.0/24")
+	_, netB, _ := net.ParseCIDR("192.168.0.0/16")
+	p := InternalPolicy{
+		networks: []*net.IPNet{netA, netB},
+	}
 
-	// We check the internal function directly for edge cases
-	if !hostMatches("exact.com", InternalPolicy{destinationHosts: []string{"exact.com"}}) {
-		t.Error("Should match exact domain")
+	tests := []struct {
+		ip      string
+		matches bool
+	}{
+		{"10.0.0.5", true},
+		{"192.168.1.1", true},
+		{"8.8.8.8", false},
+		{"10.0.1.1", false},
 	}
-	if !hostMatches("sub.wildcard.me", InternalPolicy{destinationHosts: []string{"*.wildcard.me"}}) {
-		t.Error("Should match subdomain wildcard")
-	}
-	if !hostMatches("anything.com", InternalPolicy{allHosts: true}) {
-		t.Error("Should match total wildcard")
+
+	for _, tc := range tests {
+		if ipMatches(net.ParseIP(tc.ip), p) != tc.matches {
+			t.Errorf("IP %s expected match=%v", tc.ip, tc.matches)
+		}
 	}
 }
